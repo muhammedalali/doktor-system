@@ -1,9 +1,11 @@
 'use client'; 
+
 import { useState, useEffect, useRef } from 'react'; 
 import Link from 'next/link'; 
 import { useRouter } from 'next/navigation'; 
 import { useTheme } from '@/context/ThemeContext'; 
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 const TURKEY_OFFICIAL_HOLIDAYS_2026 = {   
   '2026-01-01': 'Yılbaşı',
@@ -48,7 +50,7 @@ const generateFullMonthSchedule = (year = 2026, month = 8) => {
 
     days.push({
       dayNumber: i,
-      fullDateObj: dateObj,
+      fullDateObj: dateObj.toISOString(),
       date: `${dayNum}.${monthNum}.${year}`,
       day: dayName,
       status: initialStatus,
@@ -58,9 +60,27 @@ const generateFullMonthSchedule = (year = 2026, month = 8) => {
   return days;
 };
 
+const parseItemDate = (item) => {
+  if (!item) return null;
+  if (typeof item.date === 'string' && item.date.includes('.')) {
+    const parts = item.date.split('.');
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const year = parseInt(parts[2], 10);
+      return new Date(year, month, day);
+    }
+  }
+  if (item.fullDateObj) {
+    const d = new Date(item.fullDateObj);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+};
+
 const defaultDoctors = [   
   {      
-    id: 1,      
+    id: 'doc-1',      
     name: 'DR. AHMET YILMAZ',      
     clinic: 'İÇ HASTALIKLARI (DAHİLİYE)',      
     status: 'POLİKLİNİK',      
@@ -70,7 +90,7 @@ const defaultDoctors = [
     scheduleDays: generateFullMonthSchedule(2026, 8)
   },   
   {      
-    id: 2,      
+    id: 'doc-2',      
     name: 'DR. AYŞE KAYA',      
     clinic: 'GÖZ HASTALIKLARI',      
     status: 'AMELİYATTA',      
@@ -94,6 +114,7 @@ const statusStyles = {
 };
 
 export default function SchedulePage() {   
+  const [isMounted, setIsMounted] = useState(false);
   const [filter, setFilter] = useState('HEPSİ');   
   const [searchTerm, setSearchTerm] = useState('');   
   const [sortBy, setSortBy] = useState('NEWEST');   
@@ -131,7 +152,8 @@ export default function SchedulePage() {
   today.setHours(0, 0, 0, 0);   
   const todayFormattedStr = `${String(today.getDate()).padStart(2, '0')}.${String(today.getMonth() + 1).padStart(2, '0')}.${today.getFullYear()}`;
 
-  useEffect(() => {     
+  useEffect(() => {
+    setIsMounted(true);
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);     
     return () => clearInterval(timer);   
   }, []);   
@@ -177,14 +199,17 @@ export default function SchedulePage() {
     };   
   }, [showPrintModal, selectedDoctorDetail, isMinimized, editingDoctor, deletingDoctorId]);   
 
+  // التمرير التلقائي المباشر لليوم الحالي
   useEffect(() => {     
-    if (selectedDoctorDetail && isFirstOpenRef.current && todayRef.current) {       
-      setTimeout(() => {         
-        todayRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });         
-        isFirstOpenRef.current = false;       
-      }, 150);     
+    if (selectedDoctorDetail && !isMinimized) {       
+      const timer = setTimeout(() => {         
+        if (todayRef.current) {
+          todayRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });         
+        }
+      }, 250);     
+      return () => clearTimeout(timer);
     }   
-  }, [selectedDoctorDetail]);   
+  }, [selectedDoctorDetail, isMinimized]);   
 
   const handleMouseDownHeader = (e) => {     
     if (isMaximized) return;     
@@ -242,21 +267,18 @@ export default function SchedulePage() {
     return doc.status === 'POLİK' ? 'POLİKLİNİK' : doc.status;
   };
 
-  const loadDoctorsFromSupabase = async () => {
-    try {
-      const { data, error } = await supabase.from('doctors').select('*');
-      if (!error && data && data.length > 0) {
+  useEffect(() => {     
+    const sessionUser = sessionStorage.getItem('user');     
+    const localUser = localStorage.getItem('user');     
+    const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : {});     
+    setCurrentUser(activeUser);     
+
+    const unsubscribe = onSnapshot(collection(db, 'doctors'), (snapshot) => {
+      if (!snapshot.empty) {
+        const data = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
         const normalizedDocs = data.map(doc => {
           const updatedDays = doc.scheduleDays ? doc.scheduleDays.map(sd => {
-            let dayObj;
-            if (sd.fullDateObj) {
-              dayObj = new Date(sd.fullDateObj);
-            } else if (sd.date) {
-              const parts = sd.date.split('.');
-              if (parts.length === 3) {
-                dayObj = new Date(parts[2], parseInt(parts[1]) - 1, parts[0]);
-              }
-            }
+            let dayObj = parseItemDate(sd);
             if (dayObj) {
               const dayIdx = dayObj.getDay();
               if ((dayIdx === 0 || dayIdx === 6) && (sd.status === 'POLİK' || sd.status === 'POLİKLİNİK')) {
@@ -279,37 +301,15 @@ export default function SchedulePage() {
       } else {
         setDoctors(defaultDoctors);
       }
-    } catch (e) {
-      console.error(e);
+    }, (err) => {
+      console.error('Firebase Doctors Error:', err);
       setDoctors(defaultDoctors);
-    }
-  };
-
-  useEffect(() => {     
-    const sessionUser = sessionStorage.getItem('user');     
-    const localUser = localStorage.getItem('user');     
-    const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : {});     
-    setCurrentUser(activeUser);     
-
-    loadDoctorsFromSupabase();
-
-    const channel = supabase
-      .channel('realtime_doctors_schedule')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'doctors' },
-        () => {
-          loadDoctorsFromSupabase();
-        }
-      )
-      .subscribe();
+    });
 
     const savedSort = localStorage.getItem('app_table_sort');     
     if (savedSort) setSortBy(savedSort);   
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => unsubscribe();
   }, []);   
 
   const handleOpenDoctorDetail = (doc) => {     
@@ -354,15 +354,23 @@ export default function SchedulePage() {
 
   const handleDeleteDoctorConfirm = async () => {     
     if (!deletingDoctorId) return;     
-    await supabase.from('doctors').delete().eq('id', deletingDoctorId);
-    setDeletingDoctorId(null);   
+    try {
+      await deleteDoc(doc(db, 'doctors', deletingDoctorId));
+      setDeletingDoctorId(null);
+    } catch (e) {
+      console.error('Delete Doctor Error:', e);
+    }   
   };   
 
   const handleSaveEditedDoctor = async (e) => {     
     e.preventDefault();     
     if (!editingDoctor) return;     
-    await supabase.from('doctors').update(editingDoctor).eq('id', editingDoctor.id);
-    setEditingDoctor(null);   
+    try {
+      await updateDoc(doc(db, 'doctors', editingDoctor.id), editingDoctor);
+      setEditingDoctor(null);
+    } catch (e) {
+      console.error('Edit Doctor Error:', e);
+    }   
   };   
 
   const exportToExcel = () => {     
@@ -445,8 +453,9 @@ export default function SchedulePage() {
                 )}               
               </button>             
             </div>             
-            {showClock && (               
-              <div className="flex items-center justify-center overflow-hidden rounded-xl border shadow-xs bg-slate-950/80 border-slate-800 transition-all animate-fadeIn">                 
+            
+            {showClock && isMounted && (               
+              <div className="flex items-center justify-center overflow-hidden rounded-xl border shadow-xs bg-slate-950/80 border-slate-800 transition-all animate-fadeIn" suppressHydrationWarning>                 
                 <span className={`px-3 py-1 text-xs sm:text-sm font-black uppercase ${                   
                   isDarkMode ? 'text-slate-200' : 'text-slate-300'                 
                 }`}>                   
@@ -457,6 +466,7 @@ export default function SchedulePage() {
                 </span>               
               </div>             
             )}             
+            
             <div className="relative w-full md:w-60">               
               <input                 
                 type="text"                 
@@ -732,31 +742,58 @@ export default function SchedulePage() {
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 font-black">                   
                   {selectedDoctorDetail.scheduleDays && selectedDoctorDetail.scheduleDays.length > 0 ? (                     
                     selectedDoctorDetail.scheduleDays.map((sd, idx) => {                       
-                      let dayObj;                       
-                      if (sd.fullDateObj) {                         
-                        dayObj = new Date(sd.fullDateObj);                       
-                      } else if (sd.date) {                         
-                        const parts = sd.date.split('.');                         
-                        if (parts.length === 3) {                           
-                          dayObj = new Date(parts[2], parseInt(parts[1]) - 1, parts[0]);                         
-                        }                       
-                      }                                              
-                      if (dayObj) dayObj.setHours(0, 0, 0, 0);                       
-                      const isPast = dayObj && dayObj < today;                       
-                      const isToday = dayObj && dayObj.getTime() === today.getTime();                       
-                      const monthNum = dayObj ? String(dayObj.getMonth() + 1).padStart(2, '0') : '';                       
-                      const dayNum = dayObj ? String(dayObj.getDate()).padStart(2, '0') : '';                       
-                      const yearNum = dayObj ? dayObj.getFullYear() : '';                       
+                      
+                      const itemDate = parseItemDate(sd);
+                      let isPast = false;
+                      let isToday = false;
+
+                      if (itemDate) {
+                        itemDate.setHours(0, 0, 0, 0);
+                        isPast = itemDate.getTime() < today.getTime();
+                        isToday = itemDate.getTime() === today.getTime();
+                      }
+
+                      const monthNum = itemDate ? String(itemDate.getMonth() + 1).padStart(2, '0') : '';                       
+                      const dayNum = itemDate ? String(itemDate.getDate()).padStart(2, '0') : '';                       
+                      const yearNum = itemDate ? itemDate.getFullYear() : '';                       
                       const isoDateStr = `${yearNum}-${monthNum}-${dayNum}`;                                              
                       const holidayName = TURKEY_OFFICIAL_HOLIDAYS_2026[isoDateStr];                       
+                      
                       return (                         
-                        <div key={idx} ref={isToday ? todayRef : null} className={`flex justify-between items-center p-4 rounded-2xl border-2 font-black transition-all ${isPast ? 'opacity-40 grayscale-[30%]' : ''} ${isToday ? 'border-amber-400 bg-amber-500/10 shadow-lg scale-[1.005]' : isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>                           
+                        <div 
+                          key={idx} 
+                          ref={isToday ? todayRef : null} 
+                          className={`flex justify-between items-center p-4 rounded-2xl border-2 font-black transition-all ${
+                            isPast 
+                              ? 'opacity-35 grayscale border-slate-800/80 bg-slate-950/40 text-slate-500' 
+                              : isToday 
+                              ? 'border-amber-400 bg-amber-500/15 shadow-xl scale-[1.005] text-amber-300' 
+                              : isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >                           
                           <div className="flex items-center gap-3 text-xs sm:text-sm">                             
-                            <span className={`font-black ${isToday ? 'text-amber-500 dark:text-amber-400 text-base' : ''}`}>{sd.date}</span>                             
+                            <span className={`font-black ${isToday ? 'text-amber-400 text-base' : ''}`}>{sd.date}</span>                             
                             <span className="text-slate-400 text-xs font-sans">{sd.day}</span>                             
-                            {isPast && <span className="text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2.5 py-0.5 rounded-md font-sans font-bold">GEÇMİŞ TARİH</span>}                             
-                            {isToday && <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-0.5 rounded-md font-sans">BUGÜN</span>}                             
-                            {holidayName && <span className="text-[10px] bg-purple-600 text-white font-black px-2.5 py-0.5 rounded-md font-sans">🇹🇷 {holidayName}</span>}                           
+                            
+                            {/* 📌 شارة التاريخ القديم */}
+                            {isPast && (
+                              <span className="text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2.5 py-0.5 rounded-md font-sans font-bold">
+                                GEÇMİŞ TARİH
+                              </span>
+                            )}                             
+                            
+                            {/* 📌 شارة اليوم الحالي */}
+                            {isToday && (
+                              <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-0.5 rounded-md font-sans animate-bounce">
+                                BUGÜN
+                              </span>
+                            )}                             
+                            
+                            {holidayName && (
+                              <span className="text-[10px] bg-purple-600 text-white font-black px-2.5 py-0.5 rounded-md font-sans">
+                                🇹🇷 {holidayName}
+                              </span>
+                            )}                           
                           </div>                           
                           <span className={`px-4 py-1.5 rounded-xl text-xs font-black border-2 ${statusStyles[sd.status] || 'bg-slate-800 text-slate-300'}`}>                             
                             {holidayName ? 'RESMİ TATİL' : sd.status}                           

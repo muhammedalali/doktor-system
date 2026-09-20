@@ -2,7 +2,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/context/ThemeContext';
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 
 const defaultDepartments = [
   'ÇOCUK SAĞLIĞI VE HASTALIKLARI',
@@ -85,7 +86,7 @@ const generateFullMonthSchedule = (year = 2026, month = 8) => {
 
     days.push({
       dayNumber: i,
-      fullDateObj: dateObj,
+      fullDateObj: dateObj.toISOString(),
       date: `${dayNum}.${monthNum}.${year}`,
       day: dayName,
       status: initialStatus,
@@ -93,6 +94,24 @@ const generateFullMonthSchedule = (year = 2026, month = 8) => {
     });
   }
   return days;
+};
+
+const parseItemDate = (item) => {
+  if (!item) return null;
+  if (typeof item.date === 'string' && item.date.includes('.')) {
+    const parts = item.date.split('.');
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const year = parseInt(parts[2], 10);
+      return new Date(year, month, day);
+    }
+  }
+  if (item.fullDateObj) {
+    const d = new Date(item.fullDateObj);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
 };
 
 const getStatusBadgeStyle = (status) => {
@@ -163,29 +182,22 @@ export default function AdminDoctorsPage() {
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  const fetchAdminDoctors = async () => {
-    const { data, error } = await supabase.from('doctors').select('*');
-    if (!error && data) {
-      setDoctors(data);
-    }
-  };
-
   useEffect(() => {
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const sessionUser = sessionStorage.getItem('user');
+    const localUser = localStorage.getItem('user');
+    const currentUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : {});
     const uName = currentUser.username ? currentUser.username.toLocaleUpperCase('tr-TR') : '';
     if (uName !== 'ADMIN' && currentUser.role !== 'YÖNETİCİ' && uName !== 'ADMIN') {
       router.push('/dashboard');
       return;
     }
 
-    fetchAdminDoctors();
-
-    const channel = supabase
-      .channel('admin_doctors_channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'doctors' }, () => {
-        fetchAdminDoctors();
-      })
-      .subscribe();
+    const unsubscribe = onSnapshot(collection(db, 'doctors'), (snapshot) => {
+      const docsData = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+      setDoctors(docsData);
+    }, (err) => {
+      console.error('Firebase Admin Doctors Error:', err);
+    });
 
     const savedDepts = JSON.parse(localStorage.getItem('app_departments') || '[]');
     if (savedDepts.length > 0) {
@@ -195,9 +207,7 @@ export default function AdminDoctorsPage() {
       localStorage.setItem('app_departments', JSON.stringify(defaultDepartments));
     }
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => unsubscribe();
   }, [router]);
 
   useEffect(() => {
@@ -210,6 +220,19 @@ export default function AdminDoctorsPage() {
       document.body.style.overflow = 'auto';
     };
   }, [showScheduleModal, isMinimized, showAddDocModal, deletingDept, deletingDoc]);
+
+  // 🎯 التمرير التلقائي لليوم الحالي يحدث **مرة واحدة فقط** عند فتح النافذة
+  useEffect(() => {
+    if (showScheduleModal && selectedDoctor && !isMinimized && isFirstOpenRef.current) {
+      const timer = setTimeout(() => {
+        if (todayRef.current) {
+          todayRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        isFirstOpenRef.current = false; // تجميد التمرير كي لا يتكرر عند تغيير الحالات بالأسفل
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [showScheduleModal, selectedDoctor, isMinimized]);
 
   const handleMouseDownHeader = (e) => {
     if (isMaximized) return;
@@ -258,7 +281,7 @@ export default function AdminDoctorsPage() {
 
   const handleOpenSchedule = (doc) => {
     setSelectedDoctor(doc);
-    isFirstOpenRef.current = true;
+    isFirstOpenRef.current = true; // تفعيل ميزة التمرير لليوم الحالي للفتح الأول فقط
     setIsMinimized(false);
     setIsMaximized(false);
     setWinPos({ x: 0, y: 0 });
@@ -270,8 +293,12 @@ export default function AdminDoctorsPage() {
     const newSchedule = generateFullMonthSchedule(year, month);
     const updatedDoc = { ...selectedDoctor, scheduleDays: newSchedule };
     setSelectedDoctor(updatedDoc);
-    await supabase.from('doctors').update({ scheduleDays: newSchedule }).eq('id', selectedDoctor.id);
-    triggerToast(`Takvim güncellendi: ${month + 1}.${year}`);
+    try {
+      await updateDoc(doc(db, 'doctors', selectedDoctor.id), { scheduleDays: newSchedule });
+      triggerToast(`Takvim güncellendi: ${month + 1}.${year}`);
+    } catch (e) {
+      console.error('Regenerate month error:', e);
+    }
   };
 
   const handleDayStatusChange = async (index, newStatus) => {
@@ -280,7 +307,11 @@ export default function AdminDoctorsPage() {
     updatedSchedule[index].status = newStatus;
     const updatedDoc = { ...selectedDoctor, scheduleDays: updatedSchedule };
     setSelectedDoctor(updatedDoc);
-    await supabase.from('doctors').update({ scheduleDays: updatedSchedule }).eq('id', selectedDoctor.id);
+    try {
+      await updateDoc(doc(db, 'doctors', selectedDoctor.id), { scheduleDays: updatedSchedule });
+    } catch (e) {
+      console.error('Update day status error:', e);
+    }
   };
 
   const handleAddCustomDepartment = (e) => {
@@ -307,9 +338,13 @@ export default function AdminDoctorsPage() {
 
   const handleConfirmDeleteDoctor = async () => {
     if (!deletingDoc) return;
-    await supabase.from('doctors').delete().eq('id', deletingDoc.id);
-    triggerToast(`Doktor silindi: ${deletingDoc.name}`);
-    setDeletingDoc(null);
+    try {
+      await deleteDoc(doc(db, 'doctors', deletingDoc.id));
+      triggerToast(`Doktor silindi: ${deletingDoc.name}`);
+      setDeletingDoc(null);
+    } catch (e) {
+      console.error('Delete doctor error:', e);
+    }
   };
 
   const handleSaveNewDoctor = async (e) => {
@@ -321,12 +356,17 @@ export default function AdminDoctorsPage() {
       status: 'POLİKLİNİK',
       dahili: docDahili || '',
       roomNo: docRoomNo || '',
-      scheduleDays: generateFullMonthSchedule(2026, 8)
+      scheduleDays: generateFullMonthSchedule(2026, 8),
+      createdAt: Date.now()
     };
-    await supabase.from('doctors').insert([newDoc]);
-    setDocName(''); setDocDahili(''); setDocRoomNo('');
-    setShowAddDocModal(false);
-    triggerToast(`Doktor eklendi: ${newDoc.name}`);
+    try {
+      await addDoc(collection(db, 'doctors'), newDoc);
+      setDocName(''); setDocDahili(''); setDocRoomNo('');
+      setShowAddDocModal(false);
+      triggerToast(`Doktor eklendi: ${newDoc.name}`);
+    } catch (e) {
+      console.error('Add doctor error:', e);
+    }
   };
 
   const getDoctorsByDept = (deptName) => {
@@ -657,49 +697,49 @@ export default function AdminDoctorsPage() {
                   </div>
                 </div>
 
-                {/* List Body */}
+                {/* List Body With Exact Past/Today Calculation and Single Auto-scroll */}
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 font-black">
                   {selectedDoctor.scheduleDays && selectedDoctor.scheduleDays.map((sd, idx) => {
-                    let dayObj;
-                    if (sd.fullDateObj) {
-                      dayObj = new Date(sd.fullDateObj);
-                    } else if (sd.date) {
-                      const parts = sd.date.split('.');
-                      if (parts.length === 3) {
-                        dayObj = new Date(parts[2], parseInt(parts[1]) - 1, parts[0]);
-                      }
-                    }
-                    if (dayObj) dayObj.setHours(0, 0, 0, 0);
+                    const itemDate = parseItemDate(sd);
+                    let isPast = false;
+                    let isToday = false;
 
-                    const isPast = dayObj && dayObj < today;
-                    const isToday = dayObj && dayObj.getTime() === today.getTime();
+                    if (itemDate) {
+                      itemDate.setHours(0, 0, 0, 0);
+                      isPast = itemDate.getTime() < today.getTime();
+                      isToday = itemDate.getTime() === today.getTime();
+                    }
 
                     return (
                       <div 
                         key={idx} 
                         ref={isToday ? todayRef : null}
                         className={`flex justify-between items-center p-4 rounded-2xl border-2 transition-all ${
-                          isPast ? 'opacity-40 grayscale-[30%]' : ''
-                        } ${
-                          isToday 
-                            ? 'border-amber-400 bg-amber-500/10 shadow-lg scale-[1.005]' 
+                          isPast 
+                            ? 'opacity-35 grayscale-[40%] bg-slate-950/30 border-slate-800/80 text-slate-500' 
+                            : isToday 
+                            ? 'border-amber-400 bg-amber-500/15 shadow-xl scale-[1.005] text-amber-300' 
                             : isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
                         }`}
                       >
                         <div className="flex items-center gap-3 text-xs sm:text-sm">
-                          <span className={`font-black ${isToday ? 'text-amber-500 text-base' : ''}`}>{sd.date}</span>
+                          <span className={`font-black ${isToday ? 'text-amber-400 text-base' : ''}`}>{sd.date}</span>
                           <span className="font-sans text-xs opacity-75">{sd.day}</span>
                           
+                          {/* 📌 شارة التاريخ القديم */}
                           {isPast && (
                             <span className="text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2.5 py-0.5 rounded-md font-sans font-bold">
                               GEÇMİŞ TARİH
                             </span>
                           )}
+
+                          {/* 📌 شارة اليوم الحاضر */}
                           {isToday && (
-                            <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-0.5 rounded-md font-sans">
+                            <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-0.5 rounded-md font-sans animate-bounce">
                               BUGÜN
                             </span>
                           )}
+
                           {sd.holidayName && (
                             <span className="text-[10px] bg-purple-600 text-white font-black px-2.5 py-0.5 rounded-md font-sans">
                               🇹🇷 {sd.holidayName}

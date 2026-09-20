@@ -3,13 +3,20 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link'; 
 import { useRouter } from 'next/navigation'; 
 import { useTheme } from '@/context/ThemeContext'; 
+import PageLoader from '@/components/PageLoader';
 
 export default function DashboardPage() {   
-  const { isDarkMode, setIsSidebarOpen, setPageLoading } = useTheme();   
+  const theme = useTheme();
+  const isDarkMode = theme?.isDarkMode ?? true;
+  const setIsSidebarOpen = theme?.setIsSidebarOpen;
+  
   const [currentUser, setCurrentUser] = useState(null);   
+  const [showExitModal, setShowExitModal] = useState(false);
+  const [isBoxLoading, setIsBoxLoading] = useState(false);
   const router = useRouter();   
 
   useEffect(() => {     
+    // ✅ 1. فحص المستخدم المباشر
     const sessionUser = sessionStorage.getItem('user');
     const localUser = localStorage.getItem('user');
     const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : {});
@@ -19,13 +26,37 @@ export default function DashboardPage() {
       return;
     }
     setCurrentUser(activeUser);   
+
+    // ✅ 2. اعتراض زر الرجوع في المتصفح لمنع الخروج بالخطأ
+    window.history.pushState(null, '', window.location.href);
+    const handleBackButton = (e) => {
+      e.preventDefault();
+      window.history.pushState(null, '', window.location.href);
+      setShowExitModal(true); // إظهار النافذة المنبثقة التحذيرية الأنيقة
+    };
+
+    window.addEventListener('popstate', handleBackButton);
+    return () => {
+      window.removeEventListener('popstate', handleBackButton);
+    };
   }, [router]);   
 
+  const handleConfirmExit = () => {
+    setShowExitModal(false);
+    setIsBoxLoading(true);
+    setTimeout(() => {
+      sessionStorage.removeItem('user');
+      localStorage.removeItem('user');
+      router.push('/');
+    }, 400);
+  };
+
   const handleCardClick = (path) => {
-    if (setPageLoading) setPageLoading(true);
+    // ✅ استخدام الحالة المحلية التي لا تسبب خطأ
+    setIsBoxLoading(true);
     setTimeout(() => {
       router.push(path);
-    }, 450);
+    }, 600);
   };
 
   const uName = currentUser?.username ? currentUser.username.toLocaleUpperCase('tr-TR') : '';   
@@ -33,6 +64,9 @@ export default function DashboardPage() {
 
   return (     
     <div className="p-4 sm:p-8 max-w-7xl mx-auto space-y-8 animate-fadeIn relative">              
+      {/* شاشة التحميل الدائرية عند الضغط على المربعات */}
+      <PageLoader show={isBoxLoading} />
+
       {/* Header Card */}       
       <header className={`p-5 sm:p-6 rounded-3xl border-2 shadow-2xl backdrop-blur-xl transition-all duration-300 flex justify-between items-center ${         
         isDarkMode            
@@ -178,6 +212,43 @@ export default function DashboardPage() {
           </>         
         )}       
       </div>     
+
+      {/* ⚠️ نافذة تحذير الخروج بالخطأ */}
+      {showExitModal && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className={`w-full max-w-sm rounded-3xl border-2 p-7 shadow-2xl text-center space-y-5 animate-scaleUp ${
+            isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
+          }`}>
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 flex items-center justify-center mx-auto text-2xl animate-bounce">
+              ⚠️
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-lg font-black uppercase tracking-wide text-rose-500">
+                SİSTEMDEN ÇIKIŞ YAPILSIN MI?
+              </h3>
+              <p className="text-xs font-bold text-slate-400 leading-relaxed">
+                Geri tuşuna bastınız. Uygulamadan çıkmak ve giriş ekranına dönmek istediğinize emin misiniz?
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2 font-black">
+              <button
+                onClick={() => setShowExitModal(false)}
+                className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-2xl transition-all cursor-pointer shadow-md"
+              >
+                İPTAL
+              </button>
+              <button
+                onClick={handleConfirmExit}
+                className="flex-1 py-3.5 bg-rose-600 hover:bg-rose-500 text-white text-xs rounded-2xl shadow-lg transition-all cursor-pointer uppercase tracking-wider"
+              >
+                EVET, ÇIKIŞ YAP
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>   
   ); 
 }
