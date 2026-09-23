@@ -1,5 +1,6 @@
 import './globals.css';
 import { ThemeProvider } from '@/context/ThemeContext';
+import { DataProvider } from '@/context/DataContext';
 
 export const metadata = {
   title: 'Doktor Takip Sistemi',
@@ -11,7 +12,9 @@ export default function RootLayout({ children }) {
     <html lang="tr">
       <body>
         <ThemeProvider>
-          {children}
+          <DataProvider>
+            {children}
+          </DataProvider>
         </ThemeProvider>
       </body>
     </html>

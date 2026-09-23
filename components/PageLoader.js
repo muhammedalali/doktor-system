@@ -25,7 +25,7 @@ export default function PageLoader({ show, message = 'Yükleniyor' }) {
           <div className="w-6 h-6 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_30px_#10b981]"></div>
         </div>
 
-        {/* النص والنقاط المتتابعة */}
+        {/* النص والنقاط المتحركة */}
         <div className="space-y-1">
           <h3 className="text-2xl font-black tracking-widest text-white uppercase font-mono">
             {message}<span className="inline-block w-8 text-left text-emerald-400">{dots}</span>
