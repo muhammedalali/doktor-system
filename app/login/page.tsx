@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/context/ThemeContext';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, query, where, getDocs } from 'firebase/firestore';
 
 // مكون تخطيط القلب العصري والمنتظم بدون أي مربع (Seamless Transparent Canvas)
 function SeamlessECGCanvas({ isError = false }: { isError?: boolean }) {
@@ -16,7 +18,7 @@ function SeamlessECGCanvas({ isError = false }: { isError?: boolean }) {
 
     let animationFrameId: number;
     let x = 0;
-    const speed = isError ? 4.0 : 2.5; // سرعة ثابتة ومنتظمة تماماً
+    const speed = isError ? 4.0 : 2.5;
 
     const resize = () => {
       canvas.width = canvas.parentElement?.clientWidth || 300;
@@ -25,17 +27,15 @@ function SeamlessECGCanvas({ isError = false }: { isError?: boolean }) {
     resize();
     window.addEventListener('resize', resize);
 
-    // معادلة النبض المنتظم تماماً
     const getECGPoint = (xPos: number, width: number, height: number) => {
       const midY = height / 2;
       const cycle = xPos % width;
       const progress = cycle / width;
 
-      // موجات نبض منتظمة بدقة
       if (progress > 0.35 && progress < 0.38) return midY - 5;
       if (progress >= 0.38 && progress < 0.41) return midY + 3;
-      if (progress >= 0.41 && progress < 0.44) return midY - 26; // QRS Peak Upper
-      if (progress >= 0.44 && progress < 0.48) return midY + 18; // QRS Peak Lower
+      if (progress >= 0.41 && progress < 0.44) return midY - 26;
+      if (progress >= 0.44 && progress < 0.48) return midY + 18;
       if (progress >= 0.48 && progress < 0.51) return midY - 8;
       if (progress >= 0.51 && progress < 0.54) return midY + 2;
       return midY;
@@ -48,7 +48,6 @@ function SeamlessECGCanvas({ isError = false }: { isError?: boolean }) {
       const primaryColor = isError ? '244, 63, 94' : '16, 185, 129';
       const glowColor = isError ? '#f43f5e' : '#10b981';
 
-      // 1. المسار الأساسي الرفيع الشفاف
       ctx.beginPath();
       ctx.strokeStyle = `rgba(${primaryColor}, 0.18)`;
       ctx.lineWidth = 1.8;
@@ -59,7 +58,6 @@ function SeamlessECGCanvas({ isError = false }: { isError?: boolean }) {
       }
       ctx.stroke();
 
-      // 2. النبضة المتحركة بشكل منتظم مع ذيل التوهج
       const tailLength = 80;
       for (let i = 0; i < tailLength; i++) {
         const currentX = (x - i + width) % width;
@@ -79,7 +77,6 @@ function SeamlessECGCanvas({ isError = false }: { isError?: boolean }) {
         ctx.stroke();
       }
 
-      // 3. نقطة النبض المضيئة
       const headY = getECGPoint(x, width, height);
       ctx.shadowColor = glowColor;
       ctx.shadowBlur = 15;
@@ -109,7 +106,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   
-  // حالات الخطأ والحظر
   const [error, setError] = useState('');
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [isLocked, setIsLocked] = useState(false);
@@ -145,25 +141,30 @@ export default function LoginPage() {
       }
     }
 
-    const storedUsers = JSON.parse(localStorage.getItem('app_users') || '[]');
-    const adminExists = storedUsers.some((u: any) => u.username?.toLowerCase() === 'admin');
-    let combinedUsers = storedUsers;
-    if (!adminExists) {
-      combinedUsers = [
-        { 
-          id: 1, 
-          username: 'ADMIN', 
-          surname: 'YÖNETİCİ', 
-          birthDate: '1990-01-01', 
-          phone: '05555555555',
-          password: 'admin1233', 
-          role: 'YÖNETİCİ' 
-        },
-        ...storedUsers
-      ];
-      localStorage.setItem('app_users', JSON.stringify(combinedUsers));
-    }
-    setAllUsers(combinedUsers);
+    // 🔄 الاستماع المباشر (Real-time Listener) من Firebase Firestore
+    const unsubscribeFirestore = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const firestoreUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      // دمج حساب ADMIN الافتراضي مع مستخدمي السيرفر
+      const adminExists = firestoreUsers.some((u: any) => u.username?.toLowerCase() === 'admin');
+      let combined = firestoreUsers;
+      if (!adminExists) {
+        combined = [
+          { 
+            id: 'admin-default', 
+            username: 'ADMIN', 
+            surname: 'YÖNETİCİ', 
+            phone: '05555555555',
+            password: 'admin1233', 
+            role: 'YÖNETİCİ' 
+          },
+          ...firestoreUsers
+        ];
+      }
+
+      setAllUsers(combined);
+      localStorage.setItem('app_users', JSON.stringify(combined));
+    });
 
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -171,7 +172,9 @@ export default function LoginPage() {
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
+
     return () => {
+      unsubscribeFirestore();
       document.removeEventListener('mousedown', handleClickOutside);
       if (timerRef.current) clearTimeout(timerRef.current);
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -203,18 +206,18 @@ export default function LoginPage() {
     router.push('/dashboard');
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLocked) return;
 
-    const storedUsers = JSON.parse(localStorage.getItem('app_users') || '[]');
     const cleanInputUsername = username.trim().toLocaleUpperCase('tr-TR');
 
     let foundUser = null;
     if ((cleanInputUsername === 'ADMIN' || cleanInputUsername === 'ADMİN') && password === 'admin1233') {
       foundUser = { username: 'ADMIN', fullName: 'YÖNETİCİ ADMİN', role: 'YÖNETİCİ' };
     } else {
-      foundUser = storedUsers.find(
+      // البحث أولاً في الـ State المحمل من Firebase
+      foundUser = allUsers.find(
         (u: any) => u.username?.toLocaleUpperCase('tr-TR') === cleanInputUsername && u.password === password
       );
     }
@@ -224,10 +227,13 @@ export default function LoginPage() {
       setFailedAttempts(0);
       const isUserAdmin = foundUser.role === 'YÖNETİCİ' || foundUser.username === 'ADMIN' || foundUser.username === 'admin';
       
-      setLoggedInUser(foundUser.fullName || foundUser.username);
+      setLoggedInUser(foundUser.fullName || `${foundUser.username} ${foundUser.surname || ''}`);
       setIsAdminUser(isUserAdmin);
       setShowSuccessToast(true);
       setLoadingProgress(0);
+
+      // حفظ بيانات الدخول والجلسة
+      sessionStorage.setItem('user', JSON.stringify(foundUser));
       localStorage.setItem('user', JSON.stringify(foundUser));
 
       if (isUserAdmin) {
@@ -273,7 +279,7 @@ export default function LoginPage() {
 
       if (newAttempts >= 3) {
         setIsLocked(true);
-        const lockDurationSeconds = 1800; // 30 دقيقة
+        const lockDurationSeconds = 1800;
         const lockUntil = Date.now() + lockDurationSeconds * 1000;
         localStorage.setItem('login_lock_until', lockUntil.toString());
         setLockTimer(lockDurationSeconds);
@@ -334,7 +340,6 @@ export default function LoginPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fadeIn">
           <div className="flex flex-col items-center text-center gap-6 max-w-sm w-full relative z-10">
             
-            {/* Seamless Canvas inside Overlay */}
             <div className="w-full h-16 relative my-2 overflow-hidden">
               <SeamlessECGCanvas isError={false} />
             </div>
@@ -390,7 +395,6 @@ export default function LoginPage() {
       }`}>
         <div className="text-center mb-6 flex flex-col items-center">
           
-          {/* Transparent ECG Line (No Box, Completely Seamless) */}
           <div className="w-full h-16 relative flex items-center justify-center mb-2 overflow-hidden">
             <SeamlessECGCanvas isError={isLocked || !!error} />
           </div>
@@ -398,7 +402,6 @@ export default function LoginPage() {
           <h2 className="text-2xl font-black uppercase tracking-wide">SİSTEME GİRİŞ YAP</h2>
         </div>
 
-        {/* Cyber Alert Box for Lock & Errors */}
         {error && (
           <div className={`mb-6 p-4 rounded-2xl border-2 backdrop-blur-md transition-all duration-300 ${
             isLocked 
@@ -461,9 +464,9 @@ export default function LoginPage() {
               <div className={`absolute left-0 right-0 mt-2 max-h-48 overflow-y-auto rounded-xl border-2 shadow-xl z-40 ${
                 isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
               }`}>
-                {filteredUsers.map((u: any) => (
+                {filteredUsers.map((u: any, idx: number) => (
                   <div
-                    key={u.id || u.username}
+                    key={u.id || `${u.username}-${idx}`}
                     onClick={() => {
                       setUsername(u.username.toLocaleUpperCase('tr-TR'));
                       setShowUserDropdown(false);
@@ -478,11 +481,11 @@ export default function LoginPage() {
                       <div className={`w-7 h-7 rounded-full font-black flex items-center justify-center text-xs ${
                         isDarkMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-800'
                       }`}>
-                        {u.username.charAt(0).toLocaleUpperCase('tr-TR')}
+                        {u.username ? u.username.charAt(0).toLocaleUpperCase('tr-TR') : 'U'}
                       </div>
-                      <span>{u.username.toLocaleUpperCase('tr-TR')} {u.surname?.toLocaleUpperCase('tr-TR') || ''}</span>
+                      <span>{u.username?.toLocaleUpperCase('tr-TR')} {u.surname?.toLocaleUpperCase('tr-TR') || ''}</span>
                     </div>
-                    <span className="text-xs text-slate-400 font-mono">@{u.username.toLowerCase()}</span>
+                    <span className="text-xs text-slate-400 font-mono">@{u.username?.toLowerCase()}</span>
                   </div>
                 ))}
               </div>

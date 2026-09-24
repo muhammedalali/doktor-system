@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation'; 
 import { useTheme } from '@/context/ThemeContext'; 
 import { useData } from '@/context/DataContext';
+import { db } from '@/lib/firebase';
+import { addDoc, collection } from 'firebase/firestore';
 
 const TURKEY_OFFICIAL_HOLIDAYS_2026 = {   
   '2026-01-01': 'Yılbaşı',
@@ -126,8 +128,8 @@ const getDateTextColor = (status, dayName, isPast, isDarkMode) => {
   return textColors[status] || (isDarkMode ? 'text-slate-100 font-black' : 'text-slate-950 font-black');
 };
 
-export default function AdminScheduleTable() {   
-  const { doctors: rawDoctors, addDoctor, updateDoctor, deleteDoctor, logoutUser, currentUser } = useData(); 
+export default function PublicScheduleTable() {   
+  const { doctors: rawDoctors } = useData(); 
 
   const [filter, setFilter] = useState('HEPSİ');   
   const [searchTerm, setSearchTerm] = useState('');   
@@ -141,10 +143,6 @@ export default function AdminScheduleTable() {
   const [showSortDropdown, setShowSortDropdown] = useState(false);
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
 
-  const [showAddDoctorModal, setShowAddDoctorModal] = useState(false);
-  const [newDoctorName, setNewDoctorName] = useState('');
-  const [newDoctorClinic, setNewDoctorClinic] = useState('');
-
   const [showScrollToTodayTop, setShowScrollToTodayTop] = useState(false);
   const [showScrollToTodayBottom, setShowScrollToTodayBottom] = useState(false);
 
@@ -152,8 +150,6 @@ export default function AdminScheduleTable() {
   const [reportText, setReportText] = useState('');
   const [reportCategory, setReportCategory] = useState('SİSTEM_HATASI');
   const [reportSuccessMsg, setReportSuccessMsg] = useState(false);
-
-  const [showProfileModal, setShowProfileModal] = useState(false);
 
   const todayRef = useRef(null);   
   const modalBoxRef = useRef(null);
@@ -185,6 +181,19 @@ export default function AdminScheduleTable() {
   today.current.setHours(0, 0, 0, 0);
   const todayFormattedStr = `${String(today.current.getDate()).padStart(2, '0')}.${String(today.current.getMonth() + 1).padStart(2, '0')}.${today.current.getFullYear()}`;
 
+  // 🔄 دالة الرجوع الذكي إلى Dashboard للمسجلين وإلى الرئيسية للزوار
+  const handleGoBack = () => {
+    const sessionUser = sessionStorage.getItem('user');
+    const localUser = localStorage.getItem('user');
+    const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : null);
+
+    if (activeUser && activeUser.username) {
+      router.push('/dashboard');
+    } else {
+      router.push('/');
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (filterDropdownRef.current && !filterDropdownRef.current.contains(event.target)) {
@@ -202,10 +211,10 @@ export default function AdminScheduleTable() {
   }, []);
 
   useEffect(() => {     
-    const isModalActive = showPrintModal || (selectedDoctorDetail && !isMinimized) || showReportModal || showAddDoctorModal || showProfileModal;     
+    const isModalActive = showPrintModal || (selectedDoctorDetail && !isMinimized) || showReportModal;     
     document.body.style.overflow = isModalActive ? 'hidden' : 'auto';
     return () => { document.body.style.overflow = 'auto'; };   
-  }, [showPrintModal, selectedDoctorDetail, isMinimized, showReportModal, showAddDoctorModal, showProfileModal]);   
+  }, [showPrintModal, selectedDoctorDetail, isMinimized, showReportModal]);   
 
   const scrollToTodayInstant = useCallback(() => {
     if (todayRef.current && modalScrollContainerRef.current) {
@@ -323,86 +332,27 @@ export default function AdminScheduleTable() {
       });
   }, [doctors, filter, searchTerm, sortBy, getCurrentDayStatus]);
 
-  const handleAddDoctorSubmit = (e) => {
-    e.preventDefault();
-    if (!newDoctorName.trim() || !newDoctorClinic.trim()) return;
-
-    const newDocObj = {
-      id: Date.now(),
-      name: newDoctorName.trim(),
-      clinic: newDoctorClinic.trim(),
-      status: 'POLİKLİNİK',
-      createdAt: Date.now(),
-      scheduleDays: generateFullMonthSchedule(2026, 8)
-    };
-
-    if (addDoctor) {
-      addDoctor(newDocObj);
-    } else {
-      setDoctors(prev => [newDocObj, ...prev]);
-    }
-
-    setNewDoctorName('');
-    setNewDoctorClinic('');
-    setShowAddDoctorModal(false);
-  };
-
-  const handleDeleteDoctor = (e, docId) => {
-    e.stopPropagation();
-    if (confirm('Bu doktoru silmek istediğinize emin misiniz?')) {
-      if (deleteDoctor) {
-        deleteDoctor(docId);
-      } else {
-        setDoctors(prev => prev.filter(d => d.id !== docId));
-      }
-    }
-  };
-
-  const handleStatusChangeInModal = (dayIdx, newStatus) => {
-    if (!selectedDoctorDetail) return;
-
-    const updatedScheduleDays = selectedDoctorDetail.scheduleDays.map((sd, i) => {
-      if (i === dayIdx) {
-        return { ...sd, status: newStatus };
-      }
-      return sd;
-    });
-
-    const updatedDoc = {
-      ...selectedDoctorDetail,
-      scheduleDays: updatedScheduleDays
-    };
-
-    setSelectedDoctorDetail(updatedDoc);
-
-    if (updateDoctor) {
-      updateDoctor(updatedDoc);
-    } else {
-      setDoctors(prev => prev.map(d => d.id === updatedDoc.id ? updatedDoc : d));
-    }
-  };
-
-  const handleSendReport = (e) => {
+  const handleSendReport = async (e) => {
     e.preventDefault();
     if (!reportText.trim()) return;
 
-    const existingReports = JSON.parse(localStorage.getItem('app_user_reports') || '[]');
-    const newReport = {
-      id: Date.now(),
-      category: reportCategory,
-      text: reportText,
-      date: new Date().toLocaleString('tr-TR'),
-      user: 'YÖNETİCİ (ADMIN)'
-    };
+    try {
+      await addDoc(collection(db, 'system_issues'), {
+        category: reportCategory,
+        description: reportText.trim(),
+        createdAt: new Date().toISOString(),
+        username: 'MİSAFİR (ZİYARETÇİ)'
+      });
+      setReportSuccessMsg(true);
 
-    localStorage.setItem('app_user_reports', JSON.stringify([newReport, ...existingReports]));
-    setReportSuccessMsg(true);
-
-    setTimeout(() => {
-      setShowReportModal(false);
-      setReportText('');
-      setReportSuccessMsg(false);
-    }, 2000);
+      setTimeout(() => {
+        setShowReportModal(false);
+        setReportText('');
+        setReportSuccessMsg(false);
+      }, 2000);
+    } catch (e) {
+      console.error('Bildirim gönderilirken hata oluştu:', e);
+    }
   };
 
   const exportToExcel = () => {     
@@ -415,7 +365,7 @@ export default function AdminScheduleTable() {
     const url = URL.createObjectURL(blob);     
     const a = document.createElement('a');     
     a.href = url;     
-    a.download = `Doktor_Calisma_Listesi_Admin_${todayFormattedStr.replace(/\./g, '_')}.csv`;     
+    a.download = `Doktor_Calisma_Listesi_${todayFormattedStr.replace(/\./g, '_')}.csv`;     
     a.click();   
   };
 
@@ -432,19 +382,6 @@ export default function AdminScheduleTable() {
     { label: 'YILLIK İZİN', key: 'YILLIK İZİN' },
     { label: 'RAPORLU', key: 'RAPORLU' },
     { label: 'NÖBET SONRASI İZİN', key: 'NÖBET SONRASI İZİN' },
-  ];
-
-  const statusOptionsList = [
-    'POLİKLİNİK',
-    'AMELİYATTA',
-    'YILLIK İZİN',
-    'RAPORLU',
-    'NÖBET SONRASI İZİN',
-    'HAFTA SONU',
-    'RESMİ TATİL',
-    'ASKERLİK',
-    'ŞUA İZNİ',
-    'KONGRE/SEMİNER'
   ];
 
   const sortOptionsList = [
@@ -483,28 +420,20 @@ export default function AdminScheduleTable() {
           
           <div className="flex flex-row items-center justify-between gap-3 w-full flex-wrap sm:flex-nowrap">                          
             
-            <div className="flex items-center gap-2 shrink-0">
+            {/* ⬅️ زر الرجوع الذكي المحدث */}
+            <div className="flex items-center shrink-0">
               <button
-                onClick={() => router.push('/')}
-                className={`p-2.5 rounded-2xl border-2 cursor-pointer shadow-lg flex items-center justify-center ${
+                onClick={handleGoBack}
+                className={`p-2.5 rounded-2xl border-2 cursor-pointer shadow-lg flex items-center justify-center transition-all active:scale-95 ${
                   isDarkMode 
-                    ? 'bg-slate-800 text-amber-400 border-amber-400/60' 
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-600/60'
+                    ? 'bg-slate-800 text-amber-400 border-amber-400/60 hover:bg-slate-700' 
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-600/60 hover:bg-emerald-100'
                 }`}
-                title="Ana Sayfaya Dön"
+                title="Geri Dön"
               >
                 <svg className="w-5 h-5 stroke-[3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
                 </svg>
-              </button>
-
-              <button
-                onClick={() => setShowAddDoctorModal(true)}
-                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-2xl shadow-lg flex items-center gap-1.5 cursor-pointer"
-                title="Yeni Doktor Ekle"
-              >
-                <span className="text-sm font-bold">+</span>
-                <span className="hidden sm:inline">DOKTOR EKLE</span>
               </button>
             </div>
 
@@ -679,7 +608,7 @@ export default function AdminScheduleTable() {
                 </button>
               </div>
 
-              {/* ☰ MENÜ (قائمة تنبثق بسلاسة في أقصى اليمين نحو الأسفل) */}
+              {/* ☰ MENÜ */}
               <div className="relative" ref={menuDropdownRef}>
                 <button
                   onClick={() => {
@@ -701,27 +630,25 @@ export default function AdminScheduleTable() {
                 </button>
 
                 {showMenuDropdown && (
-                  <div className={`absolute right-0 mt-2 w-56 rounded-2xl border-2 p-2 shadow-2xl z-50 font-black text-xs transition-all duration-150 animate-in fade-in slide-in-from-top-2 ${
+                  <div className={`absolute right-0 mt-2 w-52 rounded-2xl border-2 p-2 shadow-2xl z-50 font-black text-xs ${
                     isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
                   }`}>
                     
-                    {/* 👤 Profilim (إظهار النافذة أو الانتقال دون أي خطأ) */}
                     <button
                       onClick={() => {
                         setShowMenuDropdown(false);
-                        setShowProfileModal(true);
+                        setShowReportModal(true);
                       }}
                       className={`w-full text-left p-2.5 rounded-xl flex items-center gap-2.5 cursor-pointer ${
-                        isDarkMode ? 'hover:bg-slate-800 text-emerald-400' : 'hover:bg-emerald-50 text-emerald-700'
+                        isDarkMode ? 'hover:bg-slate-800 text-rose-400' : 'hover:bg-rose-50 text-rose-600'
                       }`}
                     >
                       <svg className="w-4 h-4 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                       </svg>
-                      <span>Profilim</span>
+                      <span>Sorun Bildir</span>
                     </button>
 
-                    {/* ⚙️ Genel Ayarlar */}
                     <button
                       onClick={() => {
                         setShowMenuDropdown(false);
@@ -738,41 +665,6 @@ export default function AdminScheduleTable() {
                       <span>Genel Ayarlar</span>
                     </button>
 
-                    {/* ⚠️ Sorun Bildir */}
-                    <button
-                      onClick={() => {
-                        setShowMenuDropdown(false);
-                        setShowReportModal(true);
-                      }}
-                      className={`w-full text-left p-2.5 rounded-xl flex items-center gap-2.5 cursor-pointer ${
-                        isDarkMode ? 'hover:bg-slate-800 text-rose-400' : 'hover:bg-rose-50 text-rose-600'
-                      }`}
-                    >
-                      <svg className="w-4 h-4 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-                      </svg>
-                      <span>Sorun Bildir</span>
-                    </button>
-
-                    <div className="h-[1px] my-1 bg-slate-200 dark:bg-slate-800"></div>
-
-                    {/* 🚪 Çıkış Yap */}
-                    <button
-                      onClick={() => {
-                        setShowMenuDropdown(false);
-                        if (logoutUser) logoutUser();
-                        router.push('/login');
-                      }}
-                      className={`w-full text-left p-2.5 rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer ${
-                        isDarkMode ? 'hover:bg-rose-900/30 text-rose-400' : 'hover:bg-rose-50 text-rose-600'
-                      }`}
-                    >
-                      <svg className="w-4 h-4 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-                      </svg>
-                      <span>Çıkış Yap</span>
-                    </button>
-
                   </div>
                 )}
               </div>
@@ -782,7 +674,7 @@ export default function AdminScheduleTable() {
           </div>         
         </div>         
 
-        {/* 📊 ADMIN TABLOSU (تلوين كاشف وواضح جداً عند Hover) */}         
+        {/* 📊 ZİYARETÇİ TABLOSU */}         
         <div className={`w-full rounded-3xl overflow-hidden shadow-2xl border ${           
           isDarkMode 
             ? 'bg-slate-900 border-slate-800' 
@@ -810,14 +702,10 @@ export default function AdminScheduleTable() {
                   )}
 
                   {tableSettings.showStatus && (
-                    <th className={`${getRowPaddingClass()} border-r border-slate-300 dark:border-slate-800/80 font-black text-center tracking-wide`}>
+                    <th className={`${getRowPaddingClass()} font-black text-center tracking-wide`}>
                       DURUM
                     </th>                   
                   )}
-
-                  <th className={`${getRowPaddingClass()} font-black text-center tracking-wide w-24`}>
-                    İŞLEM
-                  </th>
                 </tr>               
               </thead>               
               
@@ -832,11 +720,11 @@ export default function AdminScheduleTable() {
                         className={`cursor-pointer transition-colors duration-150 ${                         
                           isDarkMode                            
                             ? index % 2 === 0                              
-                              ? 'bg-slate-900 hover:bg-emerald-500/20'                              
-                              : 'bg-slate-950 hover:bg-emerald-500/20'                           
+                              ? 'bg-slate-900 hover:bg-slate-800/60'                              
+                              : 'bg-slate-950 hover:bg-slate-800/60'                           
                             : index % 2 === 0                              
-                              ? 'bg-white hover:bg-emerald-100'                              
-                              : 'bg-slate-50 hover:bg-emerald-100'                       
+                              ? 'bg-white hover:bg-slate-100/80'                              
+                              : 'bg-slate-50 hover:bg-slate-100/80'                       
                         }`}                     
                       >                       
                         {tableSettings.showClinic && (
@@ -852,7 +740,7 @@ export default function AdminScheduleTable() {
                         )}
 
                         {tableSettings.showStatus && (
-                          <td className={`${getRowPaddingClass()} border-r border-slate-200 dark:border-slate-800/80 text-center`}>                         
+                          <td className={`${getRowPaddingClass()} text-center`}>                         
                             <div className="flex justify-center">
                               <span className={`inline-flex items-center justify-center w-36 h-8 rounded-xl text-xs font-black ${getStatusStyles(activeStatusToday)}`}>                           
                                 <span className="w-2 h-2 rounded-full bg-white mr-1.5 animate-pulse shrink-0"></span>                           
@@ -861,22 +749,12 @@ export default function AdminScheduleTable() {
                             </div>
                           </td>                       
                         )}
-
-                        <td className={`${getRowPaddingClass()} text-center`}>
-                          <button
-                            onClick={(e) => handleDeleteDoctor(e, doc.id)}
-                            className="p-1.5 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white rounded-xl text-xs font-black transition-colors cursor-pointer"
-                            title="Doktoru Sil"
-                          >
-                            🗑️ Sil
-                          </button>
-                        </td>
                       </tr>                   
                     );
                   })                 
                 ) : (                   
                   <tr>                     
-                    <td colSpan={4} className="p-12 text-center text-slate-400 font-black border-dashed text-base">                         
+                    <td colSpan={3} className="p-12 text-center text-slate-400 font-black border-dashed text-base">                         
                       Arama kriterlerinize uygun doktor kaydı bulunamadı.                     
                     </td>                   
                   </tr>                 
@@ -891,105 +769,6 @@ export default function AdminScheduleTable() {
           </div>         
         </div>       
       </div>       
-
-      {/* 👤 MODAL: Profilim */}
-      {showProfileModal && (
-        <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/80 p-4">
-          <div className={`w-full max-w-md rounded-3xl p-6 shadow-2xl border space-y-4 ${
-            isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
-          }`}>
-            <div className="flex justify-between items-center pb-3 border-b border-slate-700">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">👤</span>
-                <h3 className="text-base font-black text-emerald-500 uppercase">PROFİL BİLGİLERİ</h3>
-              </div>
-              <button onClick={() => setShowProfileModal(false)} className="text-slate-400 font-black text-lg cursor-pointer">✕</button>
-            </div>
-
-            <div className="space-y-3 font-black text-xs">
-              <div className="p-3 rounded-2xl bg-slate-800/40 border border-slate-700/50 flex justify-between items-center">
-                <span className="text-slate-400">KULLANICI:</span>
-                <span className="text-amber-400 font-black">{currentUser?.username || 'Yönetici (Admin)'}</span>
-              </div>
-              <div className="p-3 rounded-2xl bg-slate-800/40 border border-slate-700/50 flex justify-between items-center">
-                <span className="text-slate-400">YETKİ SEVİYESİ:</span>
-                <span className="text-emerald-400 font-black">TAM YETKİLİ ADMİN</span>
-              </div>
-              <div className="p-3 rounded-2xl bg-slate-800/40 border border-slate-700/50 flex justify-between items-center">
-                <span className="text-slate-400">SON GİRİŞ TARİHİ:</span>
-                <span className="text-slate-200">{todayFormattedStr}</span>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowProfileModal(false)}
-              className="w-full py-3 bg-emerald-600 text-white rounded-xl text-xs font-black cursor-pointer shadow-lg mt-2"
-            >
-              KAPAT
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ➕ MODAL: Yeni Doktor Ekle */}
-      {showAddDoctorModal && (
-        <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/80 p-4">
-          <div className={`w-full max-w-md rounded-3xl p-6 shadow-2xl border space-y-4 ${
-            isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
-          }`}>
-            <div className="flex justify-between items-center pb-3 border-b border-slate-700">
-              <h3 className="text-base font-black text-emerald-500 uppercase">YENİ DOKTOR EKLE</h3>
-              <button onClick={() => setShowAddDoctorModal(false)} className="text-slate-400 font-black text-lg cursor-pointer">✕</button>
-            </div>
-
-            <form onSubmit={handleAddDoctorSubmit} className="space-y-4 font-black">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">DOKTOR ADI SOYADI</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Örn: Dr. Ahmet Yılmaz"
-                  value={newDoctorName}
-                  onChange={(e) => setNewDoctorName(e.target.value)}
-                  className={`w-full p-3 rounded-xl border text-xs font-black outline-none ${
-                    isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-300'
-                  }`}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">BİRİM / POLİKLİNİK</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Örn: DAHİLİYE"
-                  value={newDoctorClinic}
-                  onChange={(e) => setNewDoctorClinic(e.target.value)}
-                  className={`w-full p-3 rounded-xl border text-xs font-black outline-none ${
-                    isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-300'
-                  }`}
-                />
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddDoctorModal(false)}
-                  className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl text-xs font-black cursor-pointer"
-                >
-                  İPTAL
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 bg-emerald-600 text-white rounded-xl text-xs font-black shadow-lg cursor-pointer"
-                >
-                  KAYDET 🚀
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* ⚠️ MODAL: Sorun Bildir */}
       {showReportModal && (
@@ -1215,7 +994,7 @@ export default function AdminScheduleTable() {
 
                 <div className={`px-6 py-3 border-b ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>                   
                   <h4 className="text-xs font-black text-amber-500 dark:text-amber-400 uppercase">                       
-                    📅 DÜZENLENEBİLİR ÇALIŞMA VE İZİN TAKVİMİ (ADMIN)
+                    📅 DETAYLI ÇALIŞMA VE İZİN TAKVİMİ                 
                   </h4>                 
                 </div>                 
 
@@ -1325,17 +1104,9 @@ export default function AdminScheduleTable() {
                             </div>                           
                             
                             <div className="flex justify-center shrink-0">
-                              <select
-                                value={sd.status}
-                                onChange={(e) => handleStatusChangeInModal(idx, e.target.value)}
-                                className={`w-36 sm:w-44 h-9 rounded-xl text-xs sm:text-sm font-black text-center cursor-pointer outline-none border-none ${getStatusStyles(sd.status, isPast)}`}
-                              >
-                                {statusOptionsList.map(opt => (
-                                  <option key={opt} value={opt} className="bg-slate-900 text-white font-black">
-                                    {opt}
-                                  </option>
-                                ))}
-                              </select>
+                              <span className={`w-36 sm:w-44 h-9 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center text-center ${getStatusStyles(sd.status, isPast)}`}>                             
+                                <span className="truncate px-2">{holidayName ? 'RESMİ TATİL' : sd.status}</span>
+                              </span>                         
                             </div>
                           </div>                       
                         );                     

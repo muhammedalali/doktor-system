@@ -140,7 +140,7 @@ const getStatusBadgeStyle = (status) => {
 
 export default function AdminDoctorsPage() {
   const { isDarkMode, activeColor, setIsSidebarOpen } = useTheme();
-  const { doctors } = useData();
+  const { doctors, setDoctors } = useData();
   
   const [openedFolder, setOpenedFolder] = useState(null); 
   const [searchQuery, setSearchQuery] = useState('');
@@ -192,7 +192,9 @@ export default function AdminDoctorsPage() {
     const localUser = localStorage.getItem('user');
     const currentUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : {});
     const uName = currentUser.username ? currentUser.username.toLocaleUpperCase('tr-TR') : '';
-    if (uName !== 'ADMIN' && currentUser.role !== 'YÖNETİCİ' && uName !== 'ADMIN') {
+    const hasPermission = currentUser.role === 'YÖNETİCİ' || uName === 'ADMIN' || currentUser.permissions?.canEditDoctors;
+
+    if (!hasPermission) {
       router.push('/dashboard');
       return;
     }
@@ -299,6 +301,9 @@ export default function AdminDoctorsPage() {
           scheduleDays: selectedDoctor.scheduleDays,
           updatedAt: Date.now()
         });
+        if (setDoctors) {
+          setDoctors(prev => prev.map(d => d.id === selectedDoctor.id ? selectedDoctor : d));
+        }
       } catch (e) {
         console.error('Takvim güncelleme hatası:', e);
       }
@@ -350,6 +355,9 @@ export default function AdminDoctorsPage() {
     if (!deletingDoc) return;
     try {
       await deleteDoc(doc(db, 'doctors', deletingDoc.id));
+      if (setDoctors) {
+        setDoctors(prev => prev.filter(d => d.id !== deletingDoc.id));
+      }
       triggerToast(`Doktor silindi: ${deletingDoc.name}`);
       setDeletingDoc(null);
     } catch (e) {
@@ -372,7 +380,10 @@ export default function AdminDoctorsPage() {
       updatedAt: now
     };
     try {
-      await addDoc(collection(db, 'doctors'), newDoc);
+      const docRef = await addDoc(collection(db, 'doctors'), newDoc);
+      if (setDoctors) {
+        setDoctors(prev => [...prev, { id: docRef.id, ...newDoc }]);
+      }
       setDocName(''); setDocDahili(''); setDocRoomNo('');
       triggerToast(`Doktor eklendi: ${newDoc.name}`);
     } catch (e) {
@@ -384,13 +395,17 @@ export default function AdminDoctorsPage() {
     e.preventDefault();
     if (!editingDoctor) return;
     try {
-      await updateDoc(doc(db, 'doctors', editingDoctor.id), {
+      const updatedData = {
         name: editingDoctor.name.trim().toLocaleUpperCase('tr-TR'),
         clinic: editingDoctor.clinic.trim().toLocaleUpperCase('tr-TR'),
         dahili: editingDoctor.dahili || '',
         roomNo: editingDoctor.roomNo || '',
         updatedAt: Date.now()
-      });
+      };
+      await updateDoc(doc(db, 'doctors', editingDoctor.id), updatedData);
+      if (setDoctors) {
+        setDoctors(prev => prev.map(d => d.id === editingDoctor.id ? { ...d, ...updatedData } : d));
+      }
       setEditingDoctor(null);
       triggerToast(`Doktor bilgileri güncellendi: ${editingDoctor.name}`);
     } catch (e) {
@@ -437,7 +452,6 @@ export default function AdminDoctorsPage() {
         isDarkMode ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-300'
       }`}>
         
-        {/* 🔙 Sol Ok Butonu (←) */}
         <button
           onClick={handleSmartBack}
           className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl border-2 font-black transition-all flex items-center justify-center cursor-pointer shadow-xs active:scale-95 bg-amber-500/10 border-amber-500/30 text-amber-500 hover:bg-amber-500 hover:text-slate-950"
@@ -459,7 +473,6 @@ export default function AdminDoctorsPage() {
           )}
         </div>
 
-        {/* ☰ Sağ Menü Butonu */}
         <button
           onClick={() => setIsSidebarOpen(true)}
           className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl border-2 font-black transition-all flex items-center justify-center cursor-pointer shadow-xs active:scale-95 ${
@@ -471,11 +484,10 @@ export default function AdminDoctorsPage() {
         </button>
       </div>
 
-      {/* 📁 ANA KLASÖR GÖRÜNÜMÜ: البطاقات مرتبة في جهة اليمين، رموز حرة، السهم في الأسفل، كتابة بسطر واحد */}
+      {/* 📁 ANA KLASÖR GÖRÜNÜMÜ */}
       {!openedFolder && (
         <div className="flex flex-wrap justify-start items-start gap-4 sm:gap-5 py-4 animate-fadeIn">
           
-          {/* Kart 1: Bölüm ve Doktor Ekle */}
           <div
             onClick={() => setOpenedFolder('ADD_FOLDER')}
             className={`w-full sm:w-72 p-4 sm:p-5 rounded-2xl border-2 shadow-md cursor-pointer flex flex-col justify-between space-y-4 ${
@@ -483,7 +495,6 @@ export default function AdminDoctorsPage() {
             }`}
           >
             <div className="flex items-center gap-2.5 overflow-hidden">
-              {/* ➕ رمز زائد حديث وغير محاط بقلب حقل */}
               <span className="text-2xl font-black text-amber-500 select-none">
                 ➕
               </span>
@@ -492,7 +503,6 @@ export default function AdminDoctorsPage() {
               </h2>
             </div>
 
-            {/* السهم في الأسفل */}
             <div className="flex justify-end pt-1">
               <span className="text-base font-black text-amber-500">
                 ➜
@@ -500,7 +510,6 @@ export default function AdminDoctorsPage() {
             </div>
           </div>
 
-          {/* Kart 2: Eklenen Bölüm ve Doktorlar */}
           <div
             onClick={() => setOpenedFolder('LIST_FOLDER')}
             className={`w-full sm:w-72 p-4 sm:p-5 rounded-2xl border-2 shadow-md cursor-pointer flex flex-col justify-between space-y-4 ${
@@ -508,7 +517,6 @@ export default function AdminDoctorsPage() {
             }`}
           >
             <div className="flex items-center gap-2.5 overflow-hidden">
-              {/* 📑 رمز حديث جداً وغير محاط بقلب حقل */}
               <span className="text-2xl font-black text-emerald-500 select-none">
                 📑
               </span>
@@ -517,7 +525,6 @@ export default function AdminDoctorsPage() {
               </h2>
             </div>
 
-            {/* السهم في الأسفل */}
             <div className="flex justify-end pt-1">
               <span className="text-base font-black text-emerald-500">
                 ➜
@@ -528,12 +535,11 @@ export default function AdminDoctorsPage() {
         </div>
       )}
 
-      {/* 📌 TAM EKRAN KLASÖR 1: BÖLÜM VE DOKTOR EKLE */}
+      {/* 📌 KLASÖR 1: BÖLÜM VE DOKTOR EKLE */}
       {openedFolder === 'ADD_FOLDER' && (
         <div className="space-y-5 animate-fadeIn">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             
-            {/* Form 1: Bölüm Ekle */}
             <div className={`p-4 sm:p-5 rounded-2xl border-2 shadow-md space-y-4 ${
               isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'
             }`}>
@@ -566,7 +572,6 @@ export default function AdminDoctorsPage() {
               </form>
             </div>
 
-            {/* Form 2: Doktor Ekle */}
             <div className={`p-4 sm:p-5 rounded-2xl border-2 shadow-md space-y-4 ${
               isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'
             }`}>
@@ -645,14 +650,13 @@ export default function AdminDoctorsPage() {
         </div>
       )}
 
-      {/* 📌 TAM EKRAN KLASÖR 2: EKLENEN BÖLÜM VE DOKTORLAR */}
+      {/* 📌 KLASÖR 2: EKLENEN BÖLÜM VE DOKTORLAR */}
       {openedFolder === 'LIST_FOLDER' && (
         <div className="space-y-4 animate-fadeIn">
           <div className={`p-4 sm:p-5 rounded-2xl border-2 shadow-md ${
             isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'
           }`}>
             
-            {/* Arama ve Kontrol Barı */}
             <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pb-3 mb-4 border-b border-slate-700/50">
               
               <div className="relative w-full sm:w-72">
@@ -683,7 +687,6 @@ export default function AdminDoctorsPage() {
               </div>
             </div>
 
-            {/* Bölüm Kartları Izgarası */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
               {departments.map((dept) => {
                 const deptDocs = getDoctorsByDept(dept);
@@ -928,7 +931,6 @@ export default function AdminDoctorsPage() {
                 } ${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'}`}
               >
                 
-                {/* Header */}
                 <div 
                   onMouseDown={handleMouseDownHeader}
                   className={`p-3.5 sm:p-4 border-b-2 flex justify-between items-center select-none ${
@@ -967,7 +969,6 @@ export default function AdminDoctorsPage() {
                   </div>
                 </div>
 
-                {/* Filtre Barı */}
                 <div className={`px-5 py-2.5 border-b flex flex-wrap items-center justify-between gap-2 ${
                   isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
@@ -1006,7 +1007,6 @@ export default function AdminDoctorsPage() {
                   </div>
                 </div>
 
-                {/* Takvim Günleri */}
                 <div className="flex-1 overflow-y-auto p-3.5 sm:p-5 space-y-2 font-black">
                   {selectedDoctor.scheduleDays && selectedDoctor.scheduleDays.map((sd, idx) => {
                     const itemDate = parseItemDate(sd);

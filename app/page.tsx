@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/context/ThemeContext';
 import { 
@@ -15,6 +16,17 @@ export default function LandingPage() {
   const router = useRouter();
   const { isDarkMode, toggleTheme } = useTheme();
 
+  // 🔄 فحص تلقائي: إذا كان المستخدم مسجلاً للدخول يتم توجيهه فوراً لـ /dashboard
+  useEffect(() => {
+    const sessionUser = sessionStorage.getItem('user');
+    const localUser = localStorage.getItem('user');
+    const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : null);
+
+    if (activeUser && activeUser.username) {
+      router.replace('/dashboard');
+    }
+  }, [router]);
+
   return (
     <div className={`min-h-screen relative overflow-x-hidden flex flex-col justify-between selection:bg-emerald-500 selection:text-white transition-colors duration-200 ${
       isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
@@ -29,7 +41,6 @@ export default function LandingPage() {
         isDarkMode ? 'border-slate-800 bg-slate-950/90' : 'border-slate-300 bg-white/95 shadow-sm'
       }`}>
         
-        {/* Modern High-Contrast Title */}
         <div className="relative cursor-default select-none">
           <h1 className={`font-black text-lg sm:text-2xl tracking-widest uppercase transition-colors duration-200 bg-clip-text text-transparent ${
             isDarkMode 
@@ -40,7 +51,6 @@ export default function LandingPage() {
           </h1>
         </div>
 
-        {/* High-Contrast Theme Button */}
         <button
           onClick={toggleTheme}
           className={`px-3 sm:px-4 py-2 rounded-xl border-2 text-xs font-black transition-all duration-150 active:scale-95 flex items-center gap-2 cursor-pointer ${
@@ -115,11 +125,9 @@ export default function LandingPage() {
                 : 'bg-white border-slate-200/90 hover:bg-emerald-50/80 hover:border-emerald-600'
             }`}
           >
-            {/* Top Border Indicator Accent */}
             <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500 opacity-60 group-hover:opacity-100 transition-opacity duration-150" />
             
             <div>
-              {/* Icon Container */}
               <div className={`w-12 h-12 rounded-xl border flex items-center justify-center transition-all duration-150 mb-4 ${
                 isDarkMode
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-slate-950 group-hover:border-emerald-400'
@@ -128,7 +136,6 @@ export default function LandingPage() {
                 <CalendarDays className="w-6 h-6" />
               </div>
 
-              {/* Title Text */}
               <h3 className={`text-xl sm:text-2xl font-black transition-colors duration-150 ${
                 isDarkMode 
                   ? 'text-slate-100 group-hover:text-emerald-300' 
@@ -138,7 +145,6 @@ export default function LandingPage() {
               </h3>
             </div>
 
-            {/* Card Footer Link */}
             <div className={`mt-6 pt-4 border-t flex items-center justify-between font-black text-xs sm:text-sm tracking-wide transition-colors duration-150 ${
               isDarkMode 
                 ? 'border-slate-800 text-emerald-400 group-hover:text-emerald-300' 
@@ -164,11 +170,9 @@ export default function LandingPage() {
                 : 'bg-white border-slate-200/90 hover:bg-teal-50/80 hover:border-teal-600'
             }`}
           >
-            {/* Top Border Indicator Accent */}
             <div className="absolute top-0 left-0 right-0 h-1 bg-teal-500 opacity-60 group-hover:opacity-100 transition-opacity duration-150" />
             
             <div>
-              {/* Icon Container */}
               <div className={`w-12 h-12 rounded-xl border flex items-center justify-center transition-all duration-150 mb-4 ${
                 isDarkMode
                   ? 'bg-teal-500/10 border-teal-500/30 text-teal-400 group-hover:bg-teal-500 group-hover:text-slate-950 group-hover:border-teal-400'
@@ -177,7 +181,6 @@ export default function LandingPage() {
                 <LogIn className="w-6 h-6" />
               </div>
 
-              {/* Title Text */}
               <h3 className={`text-xl sm:text-2xl font-black transition-colors duration-150 ${
                 isDarkMode 
                   ? 'text-slate-100 group-hover:text-teal-300' 
@@ -187,7 +190,6 @@ export default function LandingPage() {
               </h3>
             </div>
 
-            {/* Card Footer Link */}
             <div className={`mt-6 pt-4 border-t flex items-center justify-between font-black text-xs sm:text-sm tracking-wide transition-colors duration-150 ${
               isDarkMode 
                 ? 'border-slate-800 text-teal-400 group-hover:text-teal-300' 

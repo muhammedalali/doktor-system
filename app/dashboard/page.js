@@ -1,9 +1,130 @@
 'use client'; 
-import { useState, useEffect } from 'react'; 
-import Link from 'next/link'; 
+import { useState, useEffect, useRef } from 'react'; 
 import { useRouter } from 'next/navigation'; 
 import { useTheme } from '@/context/ThemeContext'; 
-import PageLoader from '@/components/PageLoader';
+import { db } from '@/lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+
+// 🩺 مكوّن تخطيط القلب العصري والمنتظم بدون مربع (Seamless Transparent Canvas)
+function SeamlessECGLoader({ title = "YÜKLENİYOR..." }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animationFrameId;
+    let x = 0;
+    const speed = 2.8; // سرعة منتظمة وانسيابية
+
+    const resize = () => {
+      canvas.width = canvas.parentElement?.clientWidth || 360;
+      canvas.height = 70;
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    // معادلة النبض المنتظم المطابقة للصفحة الرئيسية
+    const getECGPoint = (xPos, width, height) => {
+      const midY = height / 2;
+      const progress = (xPos % width) / width;
+
+      if (progress > 0.35 && progress < 0.38) return midY - 5;
+      if (progress >= 0.38 && progress < 0.41) return midY + 3;
+      if (progress >= 0.41 && progress < 0.44) return midY - 28; // QRS Peak Upper
+      if (progress >= 0.44 && progress < 0.48) return midY + 18; // QRS Peak Lower
+      if (progress >= 0.48 && progress < 0.51) return midY - 8;
+      if (progress >= 0.51 && progress < 0.54) return midY + 2;
+      return midY;
+    };
+
+    const render = () => {
+      const { width, height } = canvas;
+      ctx.clearRect(0, 0, width, height);
+
+      const primaryRGB = '16, 185, 129'; // Emerald
+      const glowHex = '#10b981';
+
+      // 1. المسار الأساسي الرفيع والشفاف
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(${primaryRGB}, 0.18)`;
+      ctx.lineWidth = 1.8;
+      for (let i = 0; i < width; i++) {
+        const y = getECGPoint(i, width, height);
+        if (i === 0) ctx.moveTo(i, y);
+        else ctx.lineTo(i, y);
+      }
+      ctx.stroke();
+
+      // 2. النبضة المتحركة مع ذيل التوهج النيون
+      const tailLength = 80;
+      for (let i = 0; i < tailLength; i++) {
+        const currentX = (x - i + width) % width;
+        const currentY = getECGPoint(currentX, width, height);
+        const alpha = Math.pow(1 - i / tailLength, 1.5);
+
+        ctx.strokeStyle = `rgba(${primaryRGB}, ${alpha})`;
+        ctx.shadowColor = glowHex;
+        ctx.shadowBlur = alpha * 10;
+        ctx.lineWidth = 2.2;
+
+        ctx.beginPath();
+        const prevX = (currentX - 1 + width) % width;
+        const prevY = getECGPoint(prevX, width, height);
+        ctx.moveTo(prevX, prevY);
+        ctx.lineTo(currentX, currentY);
+        ctx.stroke();
+      }
+
+      // 3. نقطة النبض المضيئة
+      const headY = getECGPoint(x, width, height);
+      ctx.shadowColor = glowHex;
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.arc(x, headY, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#a7f3d0';
+      ctx.fill();
+
+      x = (x + speed) % width;
+      animationFrameId = requestAnimationFrame(render);
+    };
+
+    render();
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fadeIn">
+      <div className="flex flex-col items-center text-center gap-5 max-w-sm w-full relative z-10">
+        
+        {/* التخطيط الشفاف تماماً بدون حقل/مربع */}
+        <div className="w-full h-16 relative my-1 overflow-hidden">
+          <canvas ref={canvasRef} className="w-full h-full block bg-transparent" />
+        </div>
+
+        <div className="space-y-2 w-full">
+          <div className="flex items-center justify-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+            <span className="text-xs font-black tracking-widest text-emerald-400 uppercase">
+              MODÜL YÜKLENİYOR
+            </span>
+          </div>
+
+          <h2 className="text-2xl font-black text-white tracking-tight uppercase">
+            {title}
+          </h2>
+        </div>
+
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage() {   
   const theme = useTheme();
@@ -12,14 +133,17 @@ export default function DashboardPage() {
   
   const [currentUser, setCurrentUser] = useState(null);   
   const [showExitModal, setShowExitModal] = useState(false);
-  const [isBoxLoading, setIsBoxLoading] = useState(false);
+  
+  // ⚡ حالة تفعيل شاشة تخطيط القلب العصري
+  const [isEcgLoading, setIsEcgLoading] = useState(false);
+  const [loadingTitle, setLoadingTitle] = useState('YÜKLENİYOR...');
+
   const router = useRouter();   
 
   useEffect(() => {     
-    // ✅ 1. فحص المستخدم المباشر
     const sessionUser = sessionStorage.getItem('user');
     const localUser = localStorage.getItem('user');
-    const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : {});
+    const activeUser = sessionUser ? JSON.parse(sessionUser) : (localUser ? JSON.parse(localUser) : null);
 
     if (!activeUser || !activeUser.username) {
       router.push('/');
@@ -27,45 +151,64 @@ export default function DashboardPage() {
     }
     setCurrentUser(activeUser);   
 
-    // ✅ 2. اعتراض زر الرجوع في المتصفح لمنع الخروج بالخطأ
+    let unsubscribeUser = () => {};
+    if (activeUser.id) {
+      unsubscribeUser = onSnapshot(doc(db, 'users', activeUser.id), (docSnap) => {
+        if (docSnap.exists()) {
+          const freshData = { id: docSnap.id, ...docSnap.data() };
+          setCurrentUser(freshData);
+          sessionStorage.setItem('user', JSON.stringify(freshData));
+          if (localUser) localStorage.setItem('user', JSON.stringify(freshData));
+        }
+      });
+    }
+
+    // الاعتراض المباشر لزر الرجوع
     window.history.pushState(null, '', window.location.href);
     const handleBackButton = (e) => {
       e.preventDefault();
       window.history.pushState(null, '', window.location.href);
-      setShowExitModal(true); // إظهار النافذة المنبثقة التحذيرية الأنيقة
+      setShowExitModal(true);
     };
 
     window.addEventListener('popstate', handleBackButton);
     return () => {
       window.removeEventListener('popstate', handleBackButton);
+      unsubscribeUser();
     };
   }, [router]);   
 
   const handleConfirmExit = () => {
     setShowExitModal(false);
-    setIsBoxLoading(true);
+    setLoadingTitle('SİSTEMDEN ÇIKIŞ YAPILIYOR...');
+    setIsEcgLoading(true);
     setTimeout(() => {
       sessionStorage.removeItem('user');
       localStorage.removeItem('user');
       router.push('/');
-    }, 400);
+    }, 600);
   };
 
-  const handleCardClick = (path) => {
-    // ✅ استخدام الحالة المحلية التي لا تسبب خطأ
-    setIsBoxLoading(true);
+  const handleCardClick = (path, title) => {
+    setLoadingTitle(title);
+    setIsEcgLoading(true);
     setTimeout(() => {
       router.push(path);
     }, 600);
   };
 
   const uName = currentUser?.username ? currentUser.username.toLocaleUpperCase('tr-TR') : '';   
-  const isAdmin = uName === 'ADMIN' || currentUser?.role === 'YÖNETİCİ' || uName === 'admin';   
+  const isGlobalAdmin = uName === 'ADMIN' || currentUser?.role === 'YÖNETİCİ' || currentUser?.role === 'ADMIN';   
+
+  const canManageDoctors = isGlobalAdmin || currentUser?.permissions?.canEditDoctors || currentUser?.permissions?.canDeleteDoctors;
 
   return (     
     <div className="p-4 sm:p-8 max-w-7xl mx-auto space-y-8 animate-fadeIn relative">              
-      {/* شاشة التحميل الدائرية عند الضغط على المربعات */}
-      <PageLoader show={isBoxLoading} />
+      
+      {/* 🩺 شاشة التخطيط الانسيابية بدون مربع عند التنقل والرجوع */}
+      {isEcgLoading && (
+        <SeamlessECGLoader title={loadingTitle} />
+      )}
 
       {/* Header Card */}       
       <header className={`p-5 sm:p-6 rounded-3xl border-2 shadow-2xl backdrop-blur-xl transition-all duration-300 flex justify-between items-center ${         
@@ -77,7 +220,7 @@ export default function DashboardPage() {
           onClick={() => setIsSidebarOpen && setIsSidebarOpen(true)}           
           className={`p-3 px-5 rounded-2xl border-2 font-black transition-all flex items-center gap-3 cursor-pointer shadow-md hover:scale-105 active:scale-95 ${             
             isDarkMode                
-              ? 'bg-slate-950 border-slate-700 text-emerald-400 hover:border-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.2)]'                
+              ? 'bg-slate-950 border-slate-700 text-emerald-400 hover:border-emerald-500'                
               : 'bg-slate-50 border-slate-300 text-slate-900 hover:bg-slate-100'           
           }`}         
         >           
@@ -88,22 +231,22 @@ export default function DashboardPage() {
         </button>         
 
         <div className={`px-4 py-2 rounded-2xl border-2 text-xs font-black tracking-wider uppercase shadow-inner ${           
-          isAdmin              
+          isGlobalAdmin              
             ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'              
             : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'         
         }`}>           
-          {isAdmin ? 'YÖNETİCİ (ADMIN)' : 'KULLANICI'}         
+          {isGlobalAdmin ? 'YÖNETİCİ (ADMIN)' : 'KULLANICI (YETKİLİ)'}         
         </div>       
       </header>       
 
       {/* Navigation Cards Grid */}       
-      <div className={`grid gap-6 ${isAdmin ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4' : 'grid-cols-1 sm:grid-cols-2'}`}>                  
+      <div className={`grid gap-6 ${isGlobalAdmin ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4' : canManageDoctors ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2'}`}>                  
         
         {/* 1. Doktor Çalışma Planları */}         
-        <div onClick={() => handleCardClick('/schedule')} className="group cursor-pointer">           
+        <div onClick={() => handleCardClick('/schedule', 'DOKTOR ÇALIŞMA PLANLARI')} className="group cursor-pointer">           
           <div className={`h-full border-2 rounded-3xl p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-2 shadow-2xl relative overflow-hidden ${             
             isDarkMode                
-              ? 'bg-slate-900/90 border-slate-800 hover:border-emerald-500/80 hover:shadow-[0_10px_30px_rgba(16,185,129,0.15)]'                
+              ? 'bg-slate-900/90 border-slate-800 hover:border-emerald-500/80'                
               : 'bg-white border-slate-200 hover:border-emerald-500 shadow-slate-200/60'           
           }`}>             
             <div className="flex items-center gap-4 mb-6">               
@@ -127,10 +270,10 @@ export default function DashboardPage() {
         </div>         
 
         {/* 2. Telefon Rehberi */}         
-        <div onClick={() => handleCardClick('/phonebook')} className="group cursor-pointer">           
+        <div onClick={() => handleCardClick('/phonebook', 'TELEFON REHBERİ')} className="group cursor-pointer">           
           <div className={`h-full border-2 rounded-3xl p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-2 shadow-2xl relative overflow-hidden ${             
             isDarkMode                
-              ? 'bg-slate-900/90 border-slate-800 hover:border-blue-500/80 hover:shadow-[0_10px_30px_rgba(59,130,246,0.15)]'                
+              ? 'bg-slate-900/90 border-slate-800 hover:border-blue-500/80'                
               : 'bg-white border-slate-200 hover:border-blue-500 shadow-slate-200/60'           
           }`}>             
             <div className="flex items-center gap-4 mb-6">               
@@ -153,70 +296,69 @@ export default function DashboardPage() {
           </div>         
         </div>         
 
-        {/* Admin Cards */}         
-        {isAdmin && (           
-          <>             
-            {/* 3. Birim ve Doktor Yönetimi */}             
-            <div onClick={() => handleCardClick('/admin/doctors')} className="group cursor-pointer">               
-              <div className={`h-full border-2 rounded-3xl p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-2 shadow-2xl relative overflow-hidden ${                 
-                isDarkMode                    
-                  ? 'bg-slate-900/90 border-slate-800 hover:border-amber-500/80 hover:shadow-[0_10px_30px_rgba(245,158,11,0.15)]'                    
-                  : 'bg-white border-slate-200 hover:border-amber-500 shadow-slate-200/60'               
-              }`}>                 
-                <div className="flex items-center gap-4 mb-6">                   
-                  <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform shrink-0">                     
-                    <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />                     
-                    </svg>                   
-                  </div>                   
-                  <h2 className="text-base sm:text-lg font-black text-amber-500 uppercase tracking-wide group-hover:text-amber-400 transition-colors">                     
-                    BİRİM VE DOKTOR YÖNETİMİ                   
-                  </h2>                 
+        {/* 3. POLİKLİNİK DÜZELTME MODÜLÜ */}         
+        {canManageDoctors && (           
+          <div onClick={() => handleCardClick('/admin/doctors', 'POLİKLİNİK DÜZELTME MODÜLÜ')} className="group cursor-pointer">               
+            <div className={`h-full border-2 rounded-3xl p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-2 shadow-2xl relative overflow-hidden ${                 
+              isDarkMode                    
+                ? 'bg-slate-900/90 border-slate-800 hover:border-amber-500/80'                    
+                : 'bg-white border-slate-200 hover:border-amber-500 shadow-slate-200/60'               
+            }`}>                 
+              <div className="flex items-center gap-4 mb-6">                   
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform shrink-0 shadow-lg shadow-amber-500/5">                     
+                  <svg className="w-7 h-7 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </div>                   
+                <h2 className="text-base sm:text-lg font-black text-amber-500 uppercase tracking-wide group-hover:text-amber-400 transition-colors">                     
+                  POLİKLİNİK DÜZELTME MODÜLÜ                 
+                </h2>                 
+              </div>                 
+              <div className="pt-4 border-t border-slate-800/60 flex justify-end items-center">                   
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-950 transition-all shadow-sm">                     
+                  <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />                     
+                  </svg>                   
                 </div>                 
-                <div className="pt-4 border-t border-slate-800/60 flex justify-end items-center">                   
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-950 transition-all shadow-sm">                     
-                    <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />                     
-                    </svg>                   
-                  </div>                 
-                </div>               
-              </div>             
+              </div>               
             </div>             
+          </div>             
+        )}
 
-            {/* 4. Kullanıcı Yönetimi */}             
-            <div onClick={() => handleCardClick('/admin/users')} className="group cursor-pointer">               
-              <div className={`h-full border-2 rounded-3xl p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-2 shadow-2xl relative overflow-hidden ${                 
-                isDarkMode                    
-                  ? 'bg-slate-900/90 border-slate-800 hover:border-amber-500/80 hover:shadow-[0_10px_30px_rgba(245,158,11,0.15)]'                    
-                  : 'bg-white border-slate-200 hover:border-amber-500 shadow-slate-200/60'               
-              }`}>                 
-                <div className="flex items-center gap-4 mb-6">                   
-                  <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform shrink-0">                     
-                    <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />                     
-                    </svg>                   
-                  </div>                   
-                  <h2 className="text-base sm:text-lg font-black text-amber-500 uppercase tracking-wide group-hover:text-amber-400 transition-colors">                     
-                    KULLANICI YÖNETİMİ                   
-                  </h2>                 
+        {/* 4. Kullanıcı Yönetimi (للأدمن الرئيسي فقط) */}         
+        {isGlobalAdmin && (           
+          <div onClick={() => handleCardClick('/admin/users', 'KULLANICI YÖNETİMİ')} className="group cursor-pointer">               
+            <div className={`h-full border-2 rounded-3xl p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-2 shadow-2xl relative overflow-hidden ${                 
+              isDarkMode                    
+                ? 'bg-slate-900/90 border-slate-800 hover:border-amber-500/80'                    
+                : 'bg-white border-slate-200 hover:border-amber-500 shadow-slate-200/60'               
+            }`}>                 
+              <div className="flex items-center gap-4 mb-6">                   
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform shrink-0">                     
+                  <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />                     
+                  </svg>                   
+                </div>                   
+                <h2 className="text-base sm:text-lg font-black text-amber-500 uppercase tracking-wide group-hover:text-amber-400 transition-colors">                     
+                  KULLANICI YÖNETİMİ                   
+                </h2>                 
+              </div>                 
+              <div className="pt-4 border-t border-slate-800/60 flex justify-end items-center">                   
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-950 transition-all shadow-sm">                     
+                  <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />                     
+                  </svg>                   
                 </div>                 
-                <div className="pt-4 border-t border-slate-800/60 flex justify-end items-center">                   
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-950 transition-all shadow-sm">                     
-                    <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">                       
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />                     
-                    </svg>                   
-                  </div>                 
-                </div>               
-              </div>             
-            </div>           
-          </>         
+              </div>               
+            </div>             
+          </div>           
         )}       
       </div>     
 
-      {/* ⚠️ نافذة تحذير الخروج بالخطأ */}
+      {/* ⚠️ نافذة تحذير الخروج */}
       {showExitModal && (
-        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
-          <div className={`w-full max-w-sm rounded-3xl border-2 p-7 shadow-2xl text-center space-y-5 animate-scaleUp ${
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
+          <div className={`w-full max-w-sm rounded-3xl border-2 p-7 shadow-2xl text-center space-y-5 ${
             isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
           }`}>
             <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 flex items-center justify-center mx-auto text-2xl animate-bounce">

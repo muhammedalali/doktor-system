@@ -38,7 +38,6 @@ const ModernIcons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
     </svg>
   ),
-  // Modern Key Icon (رمز المفتاح الحديث)
   Key: () => (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
@@ -54,7 +53,6 @@ const ModernIcons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 18H7.5m9-6h2.25m-2.25 0a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 12h11.25" />
     </svg>
   ),
-  // Modern Trash Icon (رمز الحذف الحديث)
   Trash: () => (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
@@ -168,8 +166,16 @@ export default function AdminUsersPage() {
     };
   }, [router]);
 
+  // 🛡️ تصفية المستخدمين لمنع تكرار Keys وللبحث بنفس الوقت
   const filteredUsers = useMemo(() => {
-    return users.filter(u => 
+    // إزالة أي عناصر مكررة تحمل نفس ID
+    const uniqueMap = new Map();
+    users.forEach(u => {
+      if (u.id) uniqueMap.set(u.id, u);
+    });
+    const uniqueList = Array.from(uniqueMap.values());
+
+    return uniqueList.filter(u => 
       (u.username && u.username.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (u.surname && u.surname.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (u.phone && u.phone.includes(searchTerm))
@@ -260,7 +266,7 @@ export default function AdminUsersPage() {
     }
   };
 
-  // İzin Değiştirme
+  // 🔑 تحديث الصلاحيات بشكل سليم في Firestore
   const handleTogglePermission = async (userId, permKey) => {
     const targetUser = users.find(u => u.id === userId);
     if (!targetUser) return;
@@ -268,13 +274,18 @@ export default function AdminUsersPage() {
     const currentPerms = targetUser.permissions || DEFAULT_PERMISSIONS;
     const updatedPerms = { ...currentPerms, [permKey]: !currentPerms[permKey] };
 
+    // تحديث الشاشة فوراً للأدمن
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, permissions: updatedPerms } : u));
+    if (selectedUserForDetails && selectedUserForDetails.id === userId) {
+      setSelectedUserForDetails(prev => ({ ...prev, permissions: updatedPerms }));
+    }
+
     try {
+      // إرسال كائن الإذن بالكامل إلى Firestore
       await updateDoc(doc(db, 'users', userId), { permissions: updatedPerms });
-      if (selectedUserForDetails && selectedUserForDetails.id === userId) {
-        setSelectedUserForDetails({ ...selectedUserForDetails, permissions: updatedPerms });
-      }
     } catch (e) {
       console.error('İzin hatası:', e);
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, permissions: currentPerms } : u));
     }
   };
 
@@ -380,7 +391,7 @@ export default function AdminUsersPage() {
         
         <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
           <div className="px-5 py-3 rounded-2xl font-black text-xs uppercase bg-amber-500 text-slate-950 shadow-md">
-            Kullanıcı Listesi ({users.length})
+            Kullanıcı Listesi ({filteredUsers.length})
           </div>
 
           <button
@@ -447,13 +458,13 @@ export default function AdminUsersPage() {
               </thead>
               <tbody className="divide-y text-xs font-bold">
                 {filteredUsers.length > 0 ? (
-                  filteredUsers.map((u) => {
+                  filteredUsers.map((u, idx) => {
                     const userPerms = u.permissions || DEFAULT_PERMISSIONS;
                     const hasActivePerms = Object.values(userPerms).some(Boolean);
 
                     return (
                       <tr 
-                        key={u.id} 
+                        key={u.id || idx} 
                         className={`transition-colors ${
                           isDarkMode 
                             ? 'hover:bg-slate-800/60 border-slate-800' 
@@ -515,6 +526,20 @@ export default function AdminUsersPage() {
                                 isDarkMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-amber-100 text-amber-800 border-amber-300'
                               }`}>
                                 Durum Değiştirme
+                              </span>
+                            )}
+                            {userPerms.canManageIssues && (
+                              <span className={`text-[10px] font-black border px-2 py-0.5 rounded-md ${
+                                isDarkMode ? 'bg-purple-500/20 text-purple-300 border-purple-500/30' : 'bg-purple-100 text-purple-800 border-purple-300'
+                              }`}>
+                                Bildirim Yönetimi
+                              </span>
+                            )}
+                            {userPerms.canViewReports && (
+                              <span className={`text-[10px] font-black border px-2 py-0.5 rounded-md ${
+                                isDarkMode ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : 'bg-indigo-100 text-indigo-800 border-indigo-300'
+                              }`}>
+                                Rapor Görüntüleme
                               </span>
                             )}
                             {!hasActivePerms && (
@@ -582,14 +607,13 @@ export default function AdminUsersPage() {
         </div>
       )}
 
-      {/* 🔔 1. MODAL: BİLDİRİMLER VE ŞİKAYETLER (DETAYLI VE MODERN) */}
+      {/* 🔔 1. MODAL: BİLDİRİMLER VE ŞİKAYETLER */}
       {isNotificationsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
           <div className={`max-w-2xl w-full max-h-[85vh] overflow-hidden rounded-3xl border shadow-2xl flex flex-col ${
             isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
           }`}>
             
-            {/* Modal Header */}
             <div className={`p-5 border-b flex justify-between items-center ${
               isDarkMode ? 'border-slate-800 bg-slate-950/50' : 'border-slate-200 bg-slate-50'
             }`}>
@@ -617,7 +641,6 @@ export default function AdminUsersPage() {
               </button>
             </div>
 
-            {/* Modal Content / List */}
             <div className="p-6 overflow-y-auto space-y-4 flex-1">
               {systemIssues.length > 0 ? (
                 systemIssues.map((req) => (
@@ -627,7 +650,6 @@ export default function AdminUsersPage() {
                       : 'bg-slate-50 border-slate-200 hover:border-slate-300 shadow-sm'
                   }`}>
                     
-                    {/* Item Header */}
                     <div className="flex justify-between items-center pb-2 border-b border-slate-200/20">
                       <div className="flex items-center gap-2">
                         <span className="p-1 rounded-lg bg-amber-500/20 text-amber-600 font-bold">
@@ -655,14 +677,12 @@ export default function AdminUsersPage() {
                       </div>
                     </div>
 
-                    {/* Issue Description */}
                     <div className="py-1">
                       <p className={`text-xs font-semibold leading-relaxed ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
                         {req.description || 'Detay açıklaması girilmedi.'}
                       </p>
                     </div>
 
-                    {/* Previous Admin Reply */}
                     {req.adminReply && (
                       <div className={`p-3 rounded-xl text-xs border ${
                         isDarkMode 
@@ -681,7 +701,6 @@ export default function AdminUsersPage() {
                       </div>
                     )}
 
-                    {/* Admin Reply Input */}
                     <div className="flex gap-2 pt-2">
                       <input
                         type="text"

@@ -528,7 +528,7 @@ export function ThemeProvider({ children }) {
           </div>
         )}
 
-        {/* 🚀 Ultra Modern Futuristic Side Menu Drawer */}
+        {/* 🚀 Side Menu Drawer */}
         <div className={`fixed inset-0 z-[100] transition-all duration-300 ${isSidebarOpen ? 'opacity-100 pointer-events-auto backdrop-blur-md' : 'opacity-0 pointer-events-none backdrop-blur-none'}`}>
           <div className="fixed inset-0 bg-black/60 transition-opacity duration-300" onClick={() => setIsSidebarOpen(false)}></div>
           
@@ -884,7 +884,7 @@ export function ThemeProvider({ children }) {
                               <p className="text-[10px] text-slate-400">{attachedFile.size}</p>
                             </div>
                           </div>
-                          <button type="button" onClick={(e) => { e.stopPropagation(); setAttachedFile(null); }} className="p-2 bg-rose-600/20 text-rose-500 hover:bg-rose-600 hover:text-white rounded-xl text-xs">İPTAL ✕</button>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setAttachedFile(null); }} className="p-2 bg-rose-600/20 text-rose-500 hover:bg-rose-600 hover:text-white rounded-xl text-xs cursor-pointer">İPTAL ✕</button>
                         </div>
                       ) : (
                         <div className="space-y-2">

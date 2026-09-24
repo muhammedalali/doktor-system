@@ -7,40 +7,81 @@ const DataContext = createContext();
 
 export function DataProvider({ children }) {
   const [doctors, setDoctors] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // 1. Yerel Depolamadan Mevcut Kullanıcıyı Yükleme
   useEffect(() => {
-    // 📡 اشتراك لحظي واحد فقط يخدم كافة صفحات النظام
-    const unsubscribe = onSnapshot(collection(db, 'doctors'), (snapshot) => {
-      if (!snapshot.empty) {
-        const data = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-
-        // 🛡️ تصفية المكرر لضمان مطابقة الأسماء تماماً بين صفحات المشروع
-        const uniqueDocsMap = new Map();
-        data.forEach(item => {
-          if (item.name && item.clinic) {
-            const key = `${item.name.trim().toLocaleUpperCase('tr-TR')}_${item.clinic.trim().toLocaleUpperCase('tr-TR')}`;
-            if (!uniqueDocsMap.has(key)) {
-              uniqueDocsMap.set(key, item);
-            }
-          }
-        });
-
-        setDoctors(Array.from(uniqueDocsMap.values()));
+    const updateCurrentUser = () => {
+      const sessionUser = sessionStorage.getItem('user');
+      const localUser = localStorage.getItem('user');
+      if (sessionUser) {
+        setCurrentUser(JSON.parse(sessionUser));
+      } else if (localUser) {
+        setCurrentUser(JSON.parse(localUser));
       } else {
-        setDoctors([]);
+        setCurrentUser(null);
       }
-      setLoading(false);
-    }, (err) => {
-      console.error('Firebase Realtime Fetch Error:', err);
-      setLoading(false);
-    });
+    };
 
-    return () => unsubscribe();
+    updateCurrentUser();
+    window.addEventListener('storage', updateCurrentUser);
+    return () => window.removeEventListener('storage', updateCurrentUser);
+  }, []);
+
+  // 2. Doktorlar ve Kullanıcılar İçin Canlı Veri Aboneliği
+  useEffect(() => {
+    // Doktorlar Aboneliği
+    const unsubscribeDoctors = onSnapshot(
+      collection(db, 'doctors'),
+      (snapshot) => {
+        const docsData = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+        setDoctors(docsData);
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Doktor Verileri Alınırken Hata Oluştu:', err);
+        setLoading(false);
+      }
+    );
+
+    // Kullanıcılar Aboneliği
+    const unsubscribeUsers = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        const usersData = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+        setUsers(usersData);
+      },
+      (err) => {
+        console.error('Kullanıcı Verileri Alınırken Hata Oluştu:', err);
+      }
+    );
+
+    return () => {
+      unsubscribeDoctors();
+      unsubscribeUsers();
+    };
   }, []);
 
   return (
-    <DataContext.Provider value={{ doctors, loading }}>
+    <DataContext.Provider
+      value={{
+        doctors,
+        setDoctors,
+        users,
+        setUsers,
+        currentUser,
+        setCurrentUser,
+        loading,
+      }}
+    >
       {children}
     </DataContext.Provider>
   );
